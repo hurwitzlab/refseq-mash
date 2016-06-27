@@ -26,53 +26,66 @@ sub main {
         });
     }; 
 
-    my $names   = $args{'names'}   or pod2usage('No names file');
-    my $out_dir = $args{'out-dir'} || '';
+    my @assembly_files = @ARGV or pod2usage('No names file');
+    my $out_dir        = $args{'out-dir'}    || '';
+    my $incomplete     = $args{'incomplete'} || 0;
 
-    unless (-s $names) {
-        pod2usage("Names ($names) is not a file");
+    for my $assembly_info (@assembly_files) {
+        my $dir = $out_dir || dirname($assembly_info);
+
+        unless (-d $dir) {
+            make_path($dir);
+        }
+
+        printf STDERR "Processing %s => $dir\n", basename($assembly_info), $dir;
+
+        my $p = Text::RecordParser->new(
+            filename        => $assembly_info,
+            field_separator => "\t",
+            comment         => qr/^#/,
+        );
+
+        $p->bind_fields(qw[
+            assembly_accession bioproject biosample wgs_master
+            refseq_category taxid species_taxid organism_name
+            infraspecific_name isolate version_status assembly_level
+            release_type genome_rep seq_rel_date asm_name
+            submitter gbrs_paired_asm paired_asm_comp ftp_path
+            excluded_from_refseq
+        ]);
+
+        my %seen;
+        my $i = 0;
+        while (my $rec = $p->fetchrow_hashref) {
+            next unless $rec->{'version_status'} eq 'latest';
+            next unless $incomplete || $rec->{'assembly_level'} eq 'Complete Genome';
+
+            my $path        = $rec->{'ftp_path'} or next;
+            my @bits        = split /\//, $path;
+            my $asm         = $bits[5];
+            my $remote_file = join('/', $path, $asm . '_genomic.fna.gz');
+            my $local_file  = $rec->{'organism_name'}; 
+            my $strain      = '';
+
+            if ($rec->{'infraspecific_name'} =~ /^strain=(.+)/) {
+                $strain = $1;
+            }
+
+            if ($seen{ $local_file }++) {
+                $local_file .= ' ' . $strain;
+            }
+
+            $local_file     =~ s/\W+/_/g;
+            $local_file     =~ s/_$//;
+            my $local_path  = catfile($dir, $local_file . '.gz');
+
+            unless (-e $local_path) {
+                printf "ncftpget -c %s > %s\n", $remote_file, $local_path;
+            }
+        }
     }
 
-    unless ($out_dir) {
-        $out_dir = dirname($names);
-    }
-
-    unless (-d $out_dir) {
-        make_path($out_dir);
-    }
-
-    my $p = Text::RecordParser->new(
-        filename        => $names,
-        field_separator => "\t",
-        comment         => qr/^#/,
-    );
-
-    $p->bind_fields(qw[
-        assembly_accession bioproject biosample wgs_master
-        refseq_category taxid species_taxid organism_name
-        infraspecific_name isolate version_status assembly_level
-        release_type genome_rep seq_rel_date asm_name
-        submitter gbrs_paired_asm paired_asm_comp ftp_path
-        excluded_from_refseq
-    ]);
-
-    my $i = 0;
-    while (my $rec = $p->fetchrow_hashref) {
-        #say dump($rec);    
-        next unless $rec->{'assembly_level'} eq 'Complete Genome'
-             &&     $rec->{'version_status'} eq 'latest';
-
-        my $path        = $rec->{'ftp_path'} or next;
-        my @bits        = split /\//, $path;
-        my $asm         = $bits[5];
-        my $remote_file = join('/', $path, $asm . '_genomic.fna.gz');
-        (my $local_file = $rec->{'organism_name'}) =~ s/\W/_/g;
-
-        printf "ncftpget -c %s > %s\n", 
-            $remote_file, catfile($out_dir, $local_file . '.gz');
-    }
-
-    say "Done, changed $i.";
+    say STDERR "Done.";
 }
 
 # --------------------------------------------------
@@ -80,8 +93,8 @@ sub get_args {
     my %args;
     GetOptions(
         \%args,
-        'names|n=s',
         'out-dir|o:s',
+        'incomplete|i',
         'help',
         'man',
     ) or pod2usage(2);
@@ -97,21 +110,22 @@ __END__
 
 =head1 NAME
 
-change-names.pl - change the file names from accessions to species
+ftp-file-paths.pl - extract FTP file path from "assembly_summary.txt"
 
 =head1 SYNOPSIS
 
-  change-names.pl -n assembly_summary.txt -d bacteria
+  ftp-file-paths.pl assembly_summary.txt 
 
 Required arguments:
 
-  -n|--names    Assembly summary from NCBI
-  -o|--out-dir  The place where you downloaded the genomes
+  Assembly summary from NCBI
 
-Options  (defaults in parentheses):
+Options (defaults in parentheses):
 
-  --help    Show brief help and exit
-  --man     Show full documentation
+  -o|--out-dir     Download path (same as location of assembly info)
+  -i|--incomplete  Download incomplete genomes 
+  --help           Show brief help and exit
+  --man            Show full documentation
 
 =head1 DESCRIPTION
 

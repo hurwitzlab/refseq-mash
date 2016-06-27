@@ -27,7 +27,7 @@ for my $file (@ARGV) {
         if (++$i == 1) {
             my $query = shift @flds;
             $query    =~ s/^#//;
-            my @files = map { s/\..*//; basename($_) } @flds;
+            my @files = map { remove_suffix($_) } @flds;
             @flds = ($query, @files);
         }
         else {
@@ -43,3 +43,12 @@ for my $file (@ARGV) {
 }
 
 say "Done.";
+
+sub remove_suffix {
+    my $file = shift or return '';
+    my $basename = basename($file);
+    $basename    =~ s/\.msh$//;
+    $basename    =~ s/\.gz$//;
+    $basename    =~ s/\.fa(st[aq])?$//;
+    return $basename;
+}

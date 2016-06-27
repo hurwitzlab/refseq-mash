@@ -7,6 +7,7 @@ use feature 'say';
 use Data::Dump 'dump';
 use File::Basename qw'dirname basename';
 use File::Spec::Functions 'catfile';
+use File::Path 'make_path';
 use Getopt::Long;
 use Pod::Usage;
 use Text::RecordParser::Tab;
@@ -26,6 +27,13 @@ sub main {
 
     my $out_dir = $args{'out-dir'} || '';
     my $limit   = $args{'limit'}   || '';
+    my $unify   = $args{'unify'}   ||  0;
+    my $genus   = $args{'genus'}   ||  0;
+    my $species = $args{'species'} ||  0;
+
+    unless (-d $out_dir) {
+        make_path($out_dir);
+    }
 
     if ($limit eq '' || $limit < 0 || $limit > 1) {
         $limit = .99;
@@ -33,7 +41,7 @@ sub main {
 
     my $i = 0;
     for my $file (@ARGV) {
-        (my $basename = basename($file)) =~ s/\..*//;
+        (my $basename = basename($file)) =~ s/\.txt.*$//;
         printf "%3d: %s\n", ++$i, $basename;
         my $p = Text::RecordParser::Tab->new($file);
         my ($query, @samples) = $p->field_list;
@@ -43,14 +51,26 @@ sub main {
             for my $sample (@samples) {
                 my $dist = $r->{$sample};
                 if ($dist <= $limit) {
-                    push @{ $data{ $sample } }, [ $dist, $r->{'query'} ];
+                    my $key  = $unify ? 'all' : $sample;
+                    my $val  = $r->{'query'};
+                    my @bits = split(/_/, $val);
+                    if ($species) {
+                        $val = join '_', @bits[0..1];
+                    }
+                    elsif ($genus) {
+                        $val = join '_', $bits[0];
+                    }
+
+                    if ($val) {
+                        push @{ $data{ $key } }, [ $dist, $val ];
+                    }
                 }
             }
         }
 
         #say dump(\%data);
 
-        for my $sample (@samples) {
+        for my $sample (sort keys %data) {
             my @hits = @{ $data{ $sample } || [] } or next;
             (my $out_file = $sample . '_' . $basename . '.txt') =~ s/[^\w.]/_/g;
             my $path = catfile($out_dir || dirname($file), $out_file);
@@ -58,7 +78,9 @@ sub main {
             open my $fh, '>', $path;
 
             say $fh join "\t", qw(dist species);
+            my %seen;
             for my $hit (sort { $a->[0] <=> $b->[0] } @hits) {
+                next if $seen{ $hit->[1] }++;
                 say $fh join "\t", @$hit;
             }
 
@@ -76,6 +98,9 @@ sub get_args {
         \%args,
         'limit:s',
         'out-dir:s',
+        'unify',
+        'genus',
+        'species',
         'help',
         'man',
     ) or pod2usage(2);

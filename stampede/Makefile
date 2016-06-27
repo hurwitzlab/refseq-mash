@@ -3,3 +3,6 @@ clean:
 
 dist: clean
 	sbatch dist.sh
+
+test: clean
+	sbatch test.sh
