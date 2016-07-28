@@ -1,3 +1,5 @@
 #!/bin/bash
 
-run.sh -q ${QUERY_DIR} -o ${OUT_DIR}
+echo "Started $(date)"
+sh run.sh -q ${QUERY_DIR} 
+echo "Ended $(date)"

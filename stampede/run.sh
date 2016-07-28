@@ -2,9 +2,6 @@
 
 set -u
 
-QUERY_DIR=""
-OUT_DIR=""
-
 function lc() {
   wc -l "$1" | cut -d ' ' -f 1
 }
@@ -22,6 +19,18 @@ function HELP() {
 if [[ $# -eq 0 ]]; then
   HELP
 fi
+
+BIN=$( cd "$( dirname "$0" )" && pwd )
+chmod +x *.pl
+
+echo "----------"
+echo "BIN \"$BIN\""
+echo "Contents of $BIN"
+ls -lh $BIN
+echo "----------"
+
+QUERY_DIR=""
+OUT_DIR=$BIN
 
 while getopts :o:q:h OPT; do
   case $OPT in
@@ -75,10 +84,9 @@ rm "$BAM_FILES"
 
 DIST_DIR="$OUT_DIR/dist"
 QUERY_SKETCH_DIR="$OUT_DIR/sketches"
-MASH_DIR="$SCRATCH/refseq/mash"
-REF_SKETCH_DIR="$MASH_DIR/sketches"
+REPORT_DIR="$OUT_DIR/reports"
+REF_SKETCH_DIR="$SCRATCH/refseq/mash/sketches"
 MASH="$WORK/bin/mash"
-WRAPPERDIR=$( cd "$( dirname "$0" )" && pwd )
 
 if [[ ! -d $REF_SKETCH_DIR ]]; then
   echo REF_SKETCH_DIR \"$REF_SKETCH_DIR\" does not exist.
@@ -91,6 +99,10 @@ fi
 
 if [[ ! -d $QUERY_SKETCH_DIR ]]; then
   mkdir -p "$QUERY_SKETCH_DIR"
+fi
+
+if [[ ! -d $REPORT_DIR ]]; then
+  mkdir -p "$REPORT_DIR"
 fi
 
 #
@@ -128,19 +140,22 @@ if [[ ! -s ${ALL_QUERY}.msh ]]; then
 fi
 ALL_QUERY=${ALL_QUERY}.msh
 
-for GENOME in $(ls $REF_SKETCH_DIR); do
+GENOME_DIRS=$(find $REF_SKETCH_DIR -mindepth 1 -maxdepth 1 -type d)
+for GENOME in $GENOME_DIRS; do
+  GENOME_DIR=$(basename $GENOME)
+
   #
   # The reference genomes ought to have been sketched already
   #
-  ALL_REF="$(dirname $REF_SKETCH_DIR)/all-${GENOME}"
+  ALL_REF="$(dirname $REF_SKETCH_DIR)/all-${GENOME_DIR}"
 
   if [[ ! -s "${ALL_REF}.msh" ]]; then
     MSH_FILES=$(mktemp)
-    find "$REF_SKETCH_DIR/$GENOME" -type f -name \*.msh > $MSH_FILES
+    find "$REF_SKETCH_DIR/$GENOME_DIR" -type f -name \*.msh > $MSH_FILES
     NUM_MASH=$(lc "$MSH_FILES")
 
     if [[ $NUM_MASH -lt 1 ]]; then
-      echo "Found no files in \"$REF_SKETCH_DIR/$GENOME\""
+      echo "Found no files in \"$REF_SKETCH_DIR/$GENOME_DIR\""
       continue
     fi
 
@@ -151,14 +166,26 @@ for GENOME in $(ls $REF_SKETCH_DIR); do
   ALL_REF=${ALL_REF}.msh
 
   echo "DIST $(basename $ALL_QUERY) $(basename $ALL_REF)"
-  $MASH dist -t "$ALL_QUERY" "$ALL_REF" > "${DIST_DIR}/${GENOME}.txt"
+  $MASH dist -t "$ALL_QUERY" "$ALL_REF" > "${DIST_DIR}/${GENOME_DIR}.txt"
 done
 
-echo "Fixing dist output from Mash"
-./fix-dist.pl "$DIST_DIR/*.txt"
+echo "Fixing dist output \"$DIST_DIR\""
+./fix-dist.pl ${DIST_DIR}/*.txt
 
-REPORT_DIR="$OUT_DIR/species"
+echo "Contents of \"$DIST_DIR\""
+ls -l "$DIST_DIR"
 
-./report-species.pl -s -o "$REPORT_DIR" "$DIST_DIR/*.fixed"
+echo "Creating reports"
+./report-species.pl -o "$REPORT_DIR/strains" $DIST_DIR/*.fixed
+./report-species.pl -s -o "$REPORT_DIR/species" $DIST_DIR/*.fixed
+./report-species.pl -g -o "$REPORT_DIR/genus" $DIST_DIR/*.fixed
 
 echo "Done, look in REPORT_DIR \"$REPORT_DIR\""
+
+SLURM_FILE="slurm-${SLURM_JOB_ID}.out"
+
+echo "Looking for SLURM_FILE \"$SLURM_FILE\""
+
+if [[ -e $SLURM_FILE ]]; then
+  mail -s $SLURM_FILE kyclark@email.arizona.edu < $SLURM_FILE
+fi
