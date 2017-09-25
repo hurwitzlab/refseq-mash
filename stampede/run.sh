@@ -7,10 +7,10 @@ function lc() {
 }
 
 function HELP() {
-  printf "Usage:\n  %s -q QUERY_DIR -o OUT_DIR\n\n" $(basename $0)
+  printf "Usage:\n  %s -q QUERY -o OUT_DIR\n\n" $(basename $0)
 
   echo "Required arguments:"
-  echo " -q QUERY_DIR"
+  echo " -q QUERY (dir or file)"
   echo " -o OUT_DIR"
   echo ""
   exit 0
@@ -21,7 +21,6 @@ if [[ $# -eq 0 ]]; then
 fi
 
 BIN=$( cd "$( dirname "$0" )" && pwd )
-chmod +x *.pl
 
 echo "----------"
 echo "BIN \"$BIN\""
@@ -29,7 +28,7 @@ echo "Contents of $BIN"
 ls -lh $BIN
 echo "----------"
 
-QUERY_DIR=""
+QUERY=""
 OUT_DIR=$BIN
 
 while getopts :o:q:h OPT; do
@@ -41,7 +40,7 @@ while getopts :o:q:h OPT; do
       OUT_DIR="$OPTARG"
       ;;
     q)
-      QUERY_DIR="$OPTARG"
+      QUERY="$OPTARG"
       ;;
     :)
       echo "Error: Option -$OPTARG requires an argument."
@@ -53,34 +52,46 @@ while getopts :o:q:h OPT; do
   esac
 done
 
-if [[ ! -d $QUERY_DIR ]]; then
-  echo QUERY_DIR \"$QUERY_DIR\" does not exist.
+INPUT_FILES=$(mktemp)
+if [[ -f $QUERY ]]; then
+  echo $QUERY > $INPUT_FILES
+elif [[ -d $QUERY ]]; then
+  #
+  # Convert BAM files to FASTA if necessary
+  #
+  BAM_FILES=$(mktemp)
+  find "$QUERY" -name \*.bam > "$BAM_FILES"
+  NUM_BAM=$(lc "$BAM_FILES")
+
+  if [[ $NUM_BAM -gt 0 ]]; then
+    while read BAM_FILE; do
+      BASENAME=$(basename $BAM_FILE '.bam')
+      FASTA="$QUERY/${BASENAME}.fa"
+
+      if [[ ! -s $FASTA ]]; then
+        echo "Converting BAM_FILE \"$BASENAME\""
+        samtools fasta -0 "$FASTA" "$BAM_FILE"
+      fi
+    done < $BAM_FILES
+  fi
+  rm "$BAM_FILES"
+
+  find "$QUERY" -type f -not -name \*.bam > "$INPUT_FILES"
+else 
+  echo "QUERY \"$QUERY\" is neither file nor directory"
+  exit 1
+fi
+
+NUM_FILES=$(lc "$INPUT_FILES")
+
+if [[ $NUM_FILES -lt 1 ]]; then
+  echo "Found no usable files from QUERY \"$QUERY\""
   exit 1
 fi
 
 if [[ ! -d $OUT_DIR ]]; then
   mkdir -p "$OUT_DIR"
 fi
-
-#
-# Convert BAM files to FASTA if necessary
-#
-BAM_FILES=$(mktemp)
-find "$QUERY_DIR" -name \*.bam > "$BAM_FILES"
-NUM_BAM=$(lc "$BAM_FILES")
-
-if [[ $NUM_BAM -gt 0 ]]; then
-  while read BAM_FILE; do
-    BASENAME=$(basename $BAM_FILE '.bam')
-    FASTA="$QUERY_DIR/${BASENAME}.fa"
-
-    if [[ ! -s $FASTA ]]; then
-      echo "Converting BAM_FILE \"$BASENAME\""
-      samtools fasta -0 "$FASTA" "$BAM_FILE"
-    fi
-  done < $BAM_FILES
-fi
-rm "$BAM_FILES"
 
 DIST_DIR="$OUT_DIR/dist"
 QUERY_SKETCH_DIR="$OUT_DIR/sketches"
@@ -108,18 +119,10 @@ fi
 #
 # Sketch the input files, if necessary
 #
-ALL_QUERY="$OUT_DIR/all-$(basename $QUERY_DIR)"
+ALL_QUERY="$OUT_DIR/all-$(basename $QUERY)"
 if [[ ! -s ${ALL_QUERY}.msh ]]; then
-  FILES=$(mktemp)
-  find "$QUERY_DIR" -type f -not -name \*.bam > "$FILES"
-  NUM_FILES=$(lc "$FILES")
-
-  if [[ $NUM_FILES -lt 1 ]]; then
-    echo No files found in QUERY_DIR \"$QUERY_DIR\"
-    exit 1
-  fi
-
   echo Sketching NUM_FILES \"$NUM_FILES\"
+
   while read FILE; do
     SKETCH_FILE="$QUERY_SKETCH_DIR/$(basename $FILE)"
     if [[ -e "${SKETCH_FILE}.msh" ]]; then
@@ -127,7 +130,7 @@ if [[ ! -s ${ALL_QUERY}.msh ]]; then
     else
       $MASH sketch -o "$SKETCH_FILE" "$FILE"
     fi
-  done < $FILES
+  done < $INPUT_FILES
 
   echo Making ALL_QUERY \"$ALL_QUERY\" 
 
@@ -135,7 +138,7 @@ if [[ ! -s ${ALL_QUERY}.msh ]]; then
   find "$QUERY_SKETCH_DIR" -name \*.msh > "$QUERY_SKETCHES"
   $MASH paste -l "$ALL_QUERY" "$QUERY_SKETCHES"
 
-  rm "$FILES"
+  rm "$INPUT_FILES"
   rm "$QUERY_SKETCHES"
 fi
 ALL_QUERY=${ALL_QUERY}.msh
@@ -183,9 +186,3 @@ echo "Creating reports"
 echo "Done, look in REPORT_DIR \"$REPORT_DIR\""
 
 SLURM_FILE="slurm-${SLURM_JOB_ID}.out"
-
-echo "Looking for SLURM_FILE \"$SLURM_FILE\""
-
-if [[ -e $SLURM_FILE ]]; then
-  mail -s $SLURM_FILE kyclark@email.arizona.edu < $SLURM_FILE
-fi
