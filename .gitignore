@@ -1,6 +1,6 @@
 *.out
 *.log
-*.params
+*.param
 *.swp
 stampede/bin
 *.tgz
