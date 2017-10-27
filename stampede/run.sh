@@ -2,187 +2,135 @@
 
 set -u
 
+QUERY=""
+OUT_DIR="$PWD/refseq-mash-out"
+REFSEQ_MASH="/work/05066/imicrobe/iplantc.org/data/imicrobe/refseq-mash/refseq.genomes.k21s1000.msh"
+IMG="refseq-mash-0.0.3.img"
+MASH="singularity exec $IMG mash"
+
+export LAUNCHER_DIR="$HOME/src/launcher"
+export LAUNCHER_PLUGIN_DIR="$LAUNCHER_DIR/plugins"
+export LAUNCHER_WORKDIR="$PWD"
+export LAUNCHER_RMI=SLURM
+export LAUNCHER_SCHED=interleaved
+
 function lc() {
-  wc -l "$1" | cut -d ' ' -f 1
+    wc -l "$1" | cut -d ' ' -f 1
 }
 
 function HELP() {
-  printf "Usage:\n  %s -q QUERY -o OUT_DIR\n\n" $(basename $0)
+    printf "Usage:\n  %s -q QUERY [-o OUT_DIR]\n\n" "$(basename "$0")"
 
-  echo "Required arguments:"
-  echo " -q QUERY (dir or file)"
-  echo " -o OUT_DIR"
-  echo ""
-  exit 0
+    echo "Required arguments:"
+    echo " -q QUERY (dirs/files)"
+    echo ""
+    echo "Options:"
+    echo " -o OUT_DIR ($OUT_DIR)"
+    echo ""
+    exit "${1:-0}"
 }
 
-if [[ $# -eq 0 ]]; then
-  HELP
-fi
-
-BIN=$( cd "$( dirname "$0" )" && pwd )
-
-echo "----------"
-echo "BIN \"$BIN\""
-echo "Contents of $BIN"
-ls -lh $BIN
-echo "----------"
-
-QUERY=""
-OUT_DIR=$BIN
+[[ $# -eq 0 ]] && HELP 1
 
 while getopts :o:q:h OPT; do
-  case $OPT in
-    h)
-      HELP
-      ;;
-    o)
-      OUT_DIR="$OPTARG"
-      ;;
-    q)
-      QUERY="$OPTARG"
-      ;;
-    :)
-      echo "Error: Option -$OPTARG requires an argument."
-      exit 1
-      ;;
-    \?)
-      echo "Error: Invalid option: -${OPTARG:-""}"
-      exit 1
-  esac
+    case $OPT in
+      h)
+          HELP
+          ;;
+      o)
+          OUT_DIR="$OPTARG"
+          ;;
+      q)
+          QUERY="$QUERY $OPTARG"
+          ;;
+      :)
+          echo "Error: Option -$OPTARG requires an argument."
+          exit 1
+          ;;
+      \?)
+          echo "Error: Invalid option: -${OPTARG:-""}"
+          exit 1
+    esac
 done
 
+#
+# Check input, reference
+#
 INPUT_FILES=$(mktemp)
-if [[ -f $QUERY ]]; then
-  echo $QUERY > $INPUT_FILES
-elif [[ -d $QUERY ]]; then
-  #
-  # Convert BAM files to FASTA if necessary
-  #
-  BAM_FILES=$(mktemp)
-  find "$QUERY" -name \*.bam > "$BAM_FILES"
-  NUM_BAM=$(lc "$BAM_FILES")
-
-  if [[ $NUM_BAM -gt 0 ]]; then
-    while read BAM_FILE; do
-      BASENAME=$(basename $BAM_FILE '.bam')
-      FASTA="$QUERY/${BASENAME}.fa"
-
-      if [[ ! -s $FASTA ]]; then
-        echo "Converting BAM_FILE \"$BASENAME\""
-        samtools fasta -0 "$FASTA" "$BAM_FILE"
-      fi
-    done < $BAM_FILES
-  fi
-  rm "$BAM_FILES"
-
-  find "$QUERY" -type f -not -name \*.bam > "$INPUT_FILES"
-else 
-  echo "QUERY \"$QUERY\" is neither file nor directory"
-  exit 1
-fi
+for QRY in $QUERY; do
+    if [[ -d "$QRY" ]]; then
+        find "$QRY" -type f >> "$INPUT_FILES"
+    elif [[ -f "$QRY" ]]; then
+        echo "$QRY" >> "$INPUT_FILES"
+    else
+        echo "\"$QRY\" neither file nor directory"
+    fi
+done
 
 NUM_FILES=$(lc "$INPUT_FILES")
 
 if [[ $NUM_FILES -lt 1 ]]; then
-  echo "Found no usable files from QUERY \"$QUERY\""
-  exit 1
+    echo "Found no usable files from QUERY \"$QUERY\""
+    exit 1
 fi
 
-if [[ ! -d $OUT_DIR ]]; then
-  mkdir -p "$OUT_DIR"
+echo "Will process NUM_FILES \"$NUM_FILES\""
+cat -n "$INPUT_FILES"
+
+if [[ ! -f "$REFSEQ_MASH" ]]; then
+    echo "REFSEQ_MASH \"$REFSEQ_MASH\" does not exist."
+    exit 1
 fi
 
-DIST_DIR="$OUT_DIR/dist"
+#
+# Set up
+#
 QUERY_SKETCH_DIR="$OUT_DIR/sketches"
-REPORT_DIR="$OUT_DIR/reports"
-REF_SKETCH_DIR="$SCRATCH/refseq/mash/sketches"
-MASH="$WORK/bin/mash"
+DIST_DIR="$OUT_DIR/dist"
+REPORTS_DIR="$OUT_DIR/reports"
 
-if [[ ! -d $REF_SKETCH_DIR ]]; then
-  echo REF_SKETCH_DIR \"$REF_SKETCH_DIR\" does not exist.
-  exit 1
-fi
-
-if [[ ! -d $DIST_DIR ]]; then
-  mkdir -p "$DIST_DIR"
-fi
-
-if [[ ! -d $QUERY_SKETCH_DIR ]]; then
-  mkdir -p "$QUERY_SKETCH_DIR"
-fi
-
-if [[ ! -d $REPORT_DIR ]]; then
-  mkdir -p "$REPORT_DIR"
-fi
+for DIR in $QUERY_SKETCH_DIR $DIST_DIR $REPORTS_DIR; do
+    [[ ! -d $DIR ]] && mkdir -p "$DIR"
+done
 
 #
 # Sketch the input files, if necessary
 #
-ALL_QUERY="$OUT_DIR/all-$(basename $QUERY)"
-if [[ ! -s ${ALL_QUERY}.msh ]]; then
-  echo Sketching NUM_FILES \"$NUM_FILES\"
+ALL_QUERY="$OUT_DIR/all-query"
+if [[ ! -s "$ALL_QUERY.msh" ]]; then
+    echo "Sketching NUM_FILES \"$NUM_FILES\""
+  
+    i=0
+    while read -r FILE; do
+        BASENAME=$(basename "$FILE")
+        SKETCH_FILE="$QUERY_SKETCH_DIR/$BASENAME"
 
-  while read FILE; do
-    SKETCH_FILE="$QUERY_SKETCH_DIR/$(basename $FILE)"
-    if [[ -e "${SKETCH_FILE}.msh" ]]; then
-      echo SKETCH_FILE \"$SKETCH_FILE.msh\" exists already.
-    else
-      $MASH sketch -o "$SKETCH_FILE" "$FILE"
-    fi
-  done < $INPUT_FILES
-
-  echo Making ALL_QUERY \"$ALL_QUERY\" 
-
-  QUERY_SKETCHES=$(mktemp)
-  find "$QUERY_SKETCH_DIR" -name \*.msh > "$QUERY_SKETCHES"
-  $MASH paste -l "$ALL_QUERY" "$QUERY_SKETCHES"
-
-  rm "$INPUT_FILES"
-  rm "$QUERY_SKETCHES"
+        if [[ -e "${SKETCH_FILE}.msh" ]]; then
+            echo "SKETCH_FILE \"$SKETCH_FILE.msh\" exists already."
+        else
+            let i++
+            printf "%3d: %s\n" $i "Sketching $BASENAME"
+            $MASH sketch -o "$SKETCH_FILE" "$FILE"
+        fi
+    done < "$INPUT_FILES"
+  
+    echo "Making ALL_QUERY \"$ALL_QUERY\""
+  
+    QUERY_SKETCHES=$(mktemp)
+    find "$QUERY_SKETCH_DIR" -name \*.msh > "$QUERY_SKETCHES"
+    $MASH paste -l "$ALL_QUERY" "$QUERY_SKETCHES"
+  
+    rm "$INPUT_FILES"
+    rm "$QUERY_SKETCHES"
 fi
-ALL_QUERY=${ALL_QUERY}.msh
 
-GENOME_DIRS=$(find $REF_SKETCH_DIR -mindepth 1 -maxdepth 1 -type d)
-for GENOME in $GENOME_DIRS; do
-  GENOME_DIR=$(basename $GENOME)
+MASH_DIST="$DIST_DIR/mash-dist.tab"
+$MASH dist -t "$ALL_QUERY.msh" "$REFSEQ_MASH" > "$MASH_DIST"
 
-  #
-  # The reference genomes ought to have been sketched already
-  #
-  ALL_REF="$(dirname $REF_SKETCH_DIR)/all-${GENOME_DIR}"
+if [[ ! -f "$MASH_DIST" ]]; then
+    echo "Failed to create MASH_DIST \"$MASH_DIST\""
+    exit 1
+fi
 
-  if [[ ! -s "${ALL_REF}.msh" ]]; then
-    MSH_FILES=$(mktemp)
-    find "$REF_SKETCH_DIR/$GENOME_DIR" -type f -name \*.msh > $MSH_FILES
-    NUM_MASH=$(lc "$MSH_FILES")
-
-    if [[ $NUM_MASH -lt 1 ]]; then
-      echo "Found no files in \"$REF_SKETCH_DIR/$GENOME_DIR\""
-      continue
-    fi
-
-    echo "Pasting \"$NUM_MASH\" files to ALL_REF \"$ALL_REF\""
-    $MASH paste -l "$ALL_REF" "$MSH_FILES"
-    rm "$MSH_FILES"
-  fi
-  ALL_REF=${ALL_REF}.msh
-
-  echo "DIST $(basename $ALL_QUERY) $(basename $ALL_REF)"
-  $MASH dist -t "$ALL_QUERY" "$ALL_REF" > "${DIST_DIR}/${GENOME_DIR}.txt"
-done
-
-echo "Fixing dist output \"$DIST_DIR\""
-./fix-dist.pl ${DIST_DIR}/*.txt
-
-echo "Contents of \"$DIST_DIR\""
-ls -l "$DIST_DIR"
-
-echo "Creating reports"
-./report-species.pl -o "$REPORT_DIR/strains" $DIST_DIR/*.fixed
-./report-species.pl -s -o "$REPORT_DIR/species" $DIST_DIR/*.fixed
-./report-species.pl -g -o "$REPORT_DIR/genus" $DIST_DIR/*.fixed
-
-echo "Done, look in REPORT_DIR \"$REPORT_DIR\""
-
-SLURM_FILE="slurm-${SLURM_JOB_ID}.out"
+echo "Done, look in REPORTS_DIR \"$REPORTS_DIR\""
+echo "Comments to kyclark@email.arizona.edu"

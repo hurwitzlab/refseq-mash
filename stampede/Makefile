@@ -1,22 +1,16 @@
-APP_ID = "refseq-mash-0.0.2"
+APP_ID = "refseq-mash-0.0.3"
 
 clean:
-	find . \( -name \*.conf -o -name \*.out -o -name \*.log -o -name \*.params -o -name launcher-\* \) -exec rm {} \;
-
-dist: clean
-	sbatch dist.sh
+	find . \( -name \*.out -o -name \*.param \) -exec rm {} \;
 
 test: clean
 	sbatch test.sh
 
-update:
+app:
 	apps-addupdate -F app.json
 
-upload:
-	files-upload -F $(WORK)/$(APP_ID) kyclark/applications
-
-file-upload:
-	files-upload -F $(FILE) kyclark/applications/$(APP_ID)/stampede
+up:
+	copy_from_manifest.py
 
 eight:
 	submit.sh $(SCRATCH)/gwatts/8of41strainisolates $(SCRATCH)/gwatts/refseq/8of41

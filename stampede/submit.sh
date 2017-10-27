@@ -5,4 +5,6 @@ if [[ $# -lt 2 ]]; then
   exit 1
 fi
 
-sbatch -A iPlant-Collabs -N 1 -n 1 -t 24:00:00 -p normal -J refseq --mail-type BEGIN,END,FAIL --mail-user kyclark@email.arizona.edu run.sh -q $1 -o $2
+#sbatch -A iPlant-Collabs -N 1 -n 1 -t 24:00:00 -p normal -J refseq --mail-type BEGIN,END,FAIL --mail-user kyclark@email.arizona.edu run.sh -q $1 -o $2
+
+sbatch -A iPlant-Collabs -N 1 -n 1 -t 02:00:00 -p development -J rs-mash do.sh
