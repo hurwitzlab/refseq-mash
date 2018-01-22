@@ -9,6 +9,12 @@ test: clean
 app:
 	apps-addupdate -F app.json
 
+template:
+	jobs-template $(APP_ID) > job.json
+
+job:
+	jobs-submit -F job.json
+
 up:
 	copy_from_manifest.py
 

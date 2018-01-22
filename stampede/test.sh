@@ -9,4 +9,6 @@
 #SBATCH --mail-user kyclark@email.arizona.edu
 
 #run.sh -q "$SCRATCH/gazitua/fasta" -o "$SCRATCH/gazitua/refseq"
-run.sh -q "$WORK/data/dolphin/fasta"
+#run.sh -q "$WORK/data/dolphin/fasta"
+
+run.sh -q $WORK/data/dolphin/fasta/Dolphin_1_z04.fa -q $WORK/data/dolphin/fasta/Dolphin_8_z26.fa
